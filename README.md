@@ -13,3 +13,5 @@ Requires UFW. Tested on Ubuntu Server 22.04.
 
 ## Future Goals:
 - Report IPs to online database
+- Automatically port forward (UPnP?)
+- Automatically add selected ports to UFW and delete on exit
