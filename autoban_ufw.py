@@ -1,7 +1,9 @@
 import datetime
+import json
 import keyboard
 # 'sudo pip install keyboard'
 import os
+import requests
 import socket
 import struct
 import subprocess
@@ -10,6 +12,11 @@ import time
 
 from termcolor import colored
 # 'sudo pip install termcolor'
+
+
+# Set to True if you want to report to AbuseIPDB
+# Remember to set your API key
+shouldReport = True
 
 
 # You must run this script as root if you want to listen on ports < 1024
@@ -88,7 +95,7 @@ def createUFWRules(isAllowed):
 # Exit program on esc key
 def exitOnEsc():
     def callback(event):
-        if event.name == 'esc':
+        if event.name == "esc":
             printSeparator()
             printColored("ESC pressed! Shutting down...", "white", True)
             createUFWRules(False)
@@ -118,10 +125,40 @@ def printResult(address, port, isExisting):
     printColored(text, color, bold)
 
 
+def reportToAbuseIPDB(ipIn, portIn):
+    with open("ABUSEIPDB_API_KEY.txt") as api_file:
+        api_key = api_file.readline()
+    if api_key is not None and len(api_key) > 0 and "enter_your_abuseipdb_api_key_here" not in api_key:
+        categories = "14"
+        comment = "Triggered honeypot on port " + str(portIn) + ". (" + ipIn + ")"
+        timestamp = datetime.datetime.now().astimezone().replace(microsecond = 0).isoformat()
+        
+        url = "https://api.abuseipdb.com/api/v2/report"
+        params = {
+            "ip": ipIn,
+            "categories": categories,
+            "comment": comment,
+            "timestamp": timestamp
+        }
+        
+        headers = {
+            "Accept": "application/json",
+            "Key": api_key
+        }
+        
+        response = requests.request(method = "POST", url = url, headers = headers, params = params)
+        decodedResponse = json.loads(response.text)
+        print(json.dumps(decodedResponse, sort_keys = True, indent = 4))
+    else:
+        global shouldReport
+        shouldReport = False
+        printColored("AbuseIPDB API key is not set - disabling reports.", "red", False)
+
+
 def socketAccept(portNumber, theSocket):
     while True:
         conn, address = theSocket.accept()
-        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         result = subprocess.run(
             ["ufw", "deny", "from", address[0], "to", "any"],
             capture_output = True
@@ -137,6 +174,9 @@ def socketAccept(portNumber, theSocket):
         theSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         theSocket.bind(("", portNumber))
         theSocket.listen()
+        # Report IP if this is a new address to us
+        if not "existing" in result and shouldReport:
+            reportToAbuseIPDB(address[0], portNumber)
 
 
 #########################
