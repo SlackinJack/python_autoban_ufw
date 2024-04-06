@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 
+from pathlib import Path
 from termcolor import colored
 # 'sudo pip install termcolor'
 
@@ -126,9 +127,10 @@ def printResult(address, port, isExisting):
 
 
 def reportToAbuseIPDB(ipIn, portIn):
-    with open("ABUSEIPDB_API_KEY.txt") as api_file:
-        api_key = api_file.readline()
-    if api_key is not None and len(api_key) > 0 and "enter_your_abuseipdb_api_key_here" not in api_key:
+    api_file = Path("ABUSEIPDB_API_KEY.txt").read_text()
+    api_key = api_file.encode().decode("utf-8")
+    print(api_key)
+    if len(api_key) > 0 and api_key != "enter_your_abuseipdb_api_key_here":
         categories = "14"
         comment = "Triggered honeypot on port " + str(portIn) + ". (" + ipIn + ")"
         timestamp = datetime.datetime.now().astimezone().replace(microsecond = 0).isoformat()
@@ -143,7 +145,7 @@ def reportToAbuseIPDB(ipIn, portIn):
         
         headers = {
             "Accept": "application/json",
-            "Key": api_key
+            "Key": api_key.strip()
         }
         
         response = requests.request(method = "POST", url = url, headers = headers, params = params)
