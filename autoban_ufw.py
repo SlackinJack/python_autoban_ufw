@@ -3,8 +3,10 @@ import keyboard
 # 'sudo pip install keyboard'
 import os
 import socket
+import struct
 import subprocess
 import threading
+import time
 
 from termcolor import colored
 # 'sudo pip install termcolor'
@@ -16,17 +18,17 @@ ports = [
     # basic
     20, 21, 22, 23, 25,
     42, 49,
-    80, 81, 88,
+    80, 88,
     110, 119, 135, 143,
-    220, 222,
+    222,
     443, 445, 464, 465,
     989, 990, 993, 995,
     # extras
-    2000, 2020, 2121, 2200, 2222, 2323, 2525,
+    2020, 2121, 2222, 2323, 2525,
     4242, 4949,
     5900, 5901,
     8080, 8081, 8082, 8181, 8282, 8443, 8888,
-    20000, 20202, 21212, 22222, 23232, 25252,
+    20202, 21212, 22222, 23232, 25252,
     # misc
     1234, 12345, 23456, 34567, 45678, 56789,
     11111, 33333, 44444, 55555,
@@ -39,9 +41,57 @@ ports = [
 #########################
 
 
+def printColored(messageIn, colorIn, isBold):
+    attr = []
+    if isBold:
+        attr.append("bold")
+    print(colored(messageIn, colorIn, attrs = attr))
+
+
+def printSeparator():
+    print("----------------------------------------")
+
+
+# Create ufw rule for each listening port
+def createUFWRules(isAllowed):
+    # TODO: differentiate added and removed, skipped
+    if isAllowed:
+        printColored("Creating port rules...", "white", True)
+        printSeparator()
+        for port in ports:
+            print(str(port) + " --- ", end = "")
+            reason = subprocess.run(
+                ["ufw", "allow", str(port)],
+                capture_output = True
+            ).stderr.decode()
+            if len(reason) > 0:
+                printColored("FAIL: " + reason, "red", True)
+                exit()
+            else:
+                printColored("OK", "green", True)
+    else:
+        printColored("Removing port rules...", "white", True)
+        printSeparator()
+        for port in ports:
+            print(str(port) + " --- ", end = "")
+            reason = subprocess.run(
+                ["ufw", "delete", "allow", str(port)],
+                capture_output = True
+            ).stderr.decode()
+            if len(reason) > 0:
+                printColored("FAIL: " + reason, "red", True)
+                exit()
+            else:
+                printColored("OK", "green", True)
+
+
+# Exit program on esc key
 def exitOnEsc():
     def callback(event):
         if event.name == 'esc':
+            printSeparator()
+            printColored("ESC pressed! Shutting down...", "white", True)
+            createUFWRules(False)
             os._exit(1)
     return callback
 
@@ -53,28 +103,40 @@ def clearTerminal():
         i += 1
 
 
+# Print successful connection result
 def printResult(address, port, isExisting):
     text = datetime.datetime.now().strftime("%H:%M:%S")
+    bold = False
     if isExisting:
-        att = []
         color = "yellow"
         text += " = "
     else:
-        att = ["bold"]
+        bold = True
         color = "red"
         text += " + "
     text += address + " (" + str(port) + ")"
-    print(colored(text, color, attrs = att))
+    printColored(text, color, bold)
 
 
 def socketAccept(portNumber, theSocket):
     while True:
         conn, address = theSocket.accept()
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
         result = subprocess.run(
             ["ufw", "deny", "from", address[0], "to", "any"],
             capture_output = True
         ).stdout.decode()
+        # Print address and the port used
         printResult(address[0], portNumber, "existing" in result)
+        # Aggressive connection abort
+        time.sleep(1)
+        theSocket.close()
+        time.sleep(1)
+        # Re-bind socket
+        theSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        theSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        theSocket.bind(("", portNumber))
+        theSocket.listen()
 
 
 #########################
@@ -88,18 +150,33 @@ sockets = {}
 clearTerminal()
 
 
-# Will exit if any selected port is in use!
-print("Binding selected ports...")
+printSeparator()
+printColored("Starting...", "white", True)
+createUFWRules(True)
+print("")
+print("")
+print("")
+
+
+printSeparator()
+printColored("Binding selected ports...", "white", True)
+printSeparator()
+
+
 for port in ports:
+    # IPv4, TCP
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Reuse socket
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print(str(port), end = " --- ")
     try:
         s.bind(("", port))
-        print(colored("OK", "green", attrs = ["bold"]))
+        printColored("OK", "green", True)
         s.listen()
         sockets[port] = s
     except Exception as e:
-        print(colored("FAIL: " + str(e).split("] ")[1], "red", attrs = ["bold"]))
+        printColored("FAIL: " + str(e).split("] ")[1], "red", True)
+        createUFWRules(False)
         exit()
 
 
@@ -114,12 +191,16 @@ for key, value in sockets.items():
     ).start()
 
 
-print("----------------------------------------")
-print(colored("Listening for connections on ports: ", "white", attrs = ["bold"]))
-print("----------------------------------------")
+printSeparator()
+printColored("Listening for connections on ports: ", "white", True)
+printSeparator()
+
+
 for k in sockets.keys():
-    print(colored(str(k), "dark_grey"))
-print("----------------------------------------")
-print(colored("Press 'ESC' to stop at any time.", "white", attrs = ["bold"]))
+    printColored(str(k), "dark_grey", False)
+
+
+printSeparator()
+printColored("Press 'ESC' to stop at any time.", "white", True)
 keyboard.hook(exitOnEsc())
-print("----------------------------------------")
+printSeparator()
