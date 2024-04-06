@@ -129,7 +129,6 @@ def printResult(address, port, isExisting):
 def reportToAbuseIPDB(ipIn, portIn):
     api_file = Path("ABUSEIPDB_API_KEY.txt").read_text()
     api_key = api_file.encode().decode("utf-8")
-    print(api_key)
     if len(api_key) > 0 and api_key != "enter_your_abuseipdb_api_key_here":
         categories = "14"
         comment = "Triggered honeypot on port " + str(portIn) + ". (" + ipIn + ")"
