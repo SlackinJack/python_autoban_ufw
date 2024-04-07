@@ -49,6 +49,14 @@ ports = [
 #########################
 
 
+# Dictionary of [port_number, thread]
+threads = {}
+
+
+# Global thread-running variable
+shouldReviveThreads = True
+
+
 def printColored(messageIn, colorIn, isBold):
     attr = []
     if isBold:
@@ -58,6 +66,13 @@ def printColored(messageIn, colorIn, isBold):
 
 def printSeparator():
     print("----------------------------------------")
+
+
+def clearTerminal():
+    i = 0
+    while i < 64:
+        print("")
+        i += 1
 
 
 # Create ufw rule for each listening port
@@ -74,6 +89,8 @@ def createUFWRules(isAllowed):
             ).stderr.decode()
             if len(reason) > 0:
                 printColored("FAIL: " + reason, "red", True)
+                printSeparator()
+                createUFWRules(False)
                 exit()
             else:
                 printColored("OK", "green", True)
@@ -88,7 +105,6 @@ def createUFWRules(isAllowed):
             ).stderr.decode()
             if len(reason) > 0:
                 printColored("FAIL: " + reason, "red", True)
-                exit()
             else:
                 printColored("OK", "green", True)
 
@@ -99,16 +115,11 @@ def exitOnEsc():
         if event.name == "esc":
             printSeparator()
             printColored("ESC pressed! Shutting down...", "white", True)
+            global shouldReviveThreads
+            shouldReviveThreads = False
             createUFWRules(False)
             os._exit(1)
     return callback
-
-
-def clearTerminal():
-    i = 0
-    while i < 64:
-        print("")
-        i += 1
 
 
 # Print successful connection result
@@ -126,6 +137,7 @@ def printResult(address, port, isExisting):
     printColored(text, color, bold)
 
 
+# Report IP to AbuseIPDB using API key
 def reportToAbuseIPDB(ipIn, portIn):
     api_file = Path("ABUSEIPDB_API_KEY.txt").read_text()
     api_key = api_file.encode().decode("utf-8")
@@ -149,43 +161,73 @@ def reportToAbuseIPDB(ipIn, portIn):
         
         response = requests.request(method = "POST", url = url, headers = headers, params = params)
         decodedResponse = json.loads(response.text)
-        print(json.dumps(decodedResponse, sort_keys = True, indent = 4))
+        try:
+            score = str(decodedResponse["data"]["abuseConfidenceScore"])
+            printColored("Report generated: ", "light_grey", True)
+            printColored("https://www.abuseipdb.com/check/" + ipIn, "light_grey", False)
+            printColored("(Confidence: " + score + "%)", "dark_grey", False)
+        except:
+            try:
+                errors = str(decodedResponse["errors"]["detail"])
+                if "You can only report the same IP address" in errors:
+                    printColored("Tried to report duplicate IP!", "red", True)
+                    printColored("(Are rules being added to UFW?)", "white", False)
+                else:
+                    printColored("Error:", "red", True)
+                    printColored(json.dumps(decodedResponse, sort_keys = True, indent = 4), "white", False)
+            except:
+                printColored("An unknown error has occurred:", "red", True)
+                printColored(json.dumps(decodedResponse, sort_keys = True, indent = 4), "white", False)
     else:
         global shouldReport
         shouldReport = False
         printColored("AbuseIPDB API key is not set - disabling reports.", "red", False)
 
 
-def socketAccept(portNumber, theSocket):
-    while True:
-        conn, address = theSocket.accept()
-        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        result = subprocess.run(
-            ["ufw", "deny", "from", address[0], "to", "any"],
-            capture_output = True
-        ).stdout.decode()
-        # Print address and the port used
-        printResult(address[0], portNumber, "existing" in result)
-        # Aggressive connection abort
-        time.sleep(1)
-        theSocket.close()
-        time.sleep(1)
-        # Re-bind socket
-        theSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        theSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        theSocket.bind(("", portNumber))
-        theSocket.listen()
-        # Report IP if this is a new address to us
-        if not "existing" in result and shouldReport:
-            reportToAbuseIPDB(address[0], portNumber)
+# Worker thread function
+def socketAccept(portNumber):
+    # bind socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("", portNumber))
+    # listen
+    s.listen()
+    conn, address = s.accept()
+    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    # Add rule to UFW
+    result = subprocess.run(
+        ["ufw", "deny", "from", address[0], "to", "any"],
+        capture_output = True
+    ).stdout.decode()
+    # Print address and the port used
+    printResult(address[0], portNumber, "existing" in result)
+    # Abort the connection
+    s.close()
+    # Report IP if this is a new address to us
+    if not "existing" in result and shouldReport:
+        reportToAbuseIPDB(address[0], portNumber)
+    global threads
+    # Mark this thread as completed
+    threads[portNumber] = None
+
+
+# Restarts threads when they are completed
+def threadWatcher():
+    while shouldReviveThreads:
+        for key, value in threads.items():
+            if value is None:
+                t = threading.Thread(
+                    target = socketAccept,
+                    args = (key,)
+                )
+                threads[key] = t
+                t.start() 
+        time.sleep(5)
 
 
 #########################
 ######### BEGIN #########
 #########################
-
-
-sockets = {}
 
 
 clearTerminal()
@@ -200,48 +242,35 @@ print("")
 
 
 printSeparator()
-printColored("Binding selected ports...", "white", True)
+printColored("Starting workers...", "white", True)
 printSeparator()
-
-
-for port in ports:
-    # IPv4, TCP
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Reuse socket
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    print(str(port), end = " --- ")
-    try:
-        s.bind(("", port))
-        printColored("OK", "green", True)
-        s.listen()
-        sockets[port] = s
-    except Exception as e:
-        printColored("FAIL: " + str(e).split("] ")[1], "red", True)
-        createUFWRules(False)
-        exit()
-
-
-clearTerminal()
 
 
 # Create threads
-for key, value in sockets.items():
+for port in ports:
+    print(str(port), end = " --- ")
     t = threading.Thread(
         target = socketAccept,
-        args = (key,value,)
-    ).start()
+        args = (port,)
+    )
+    threads[port] = t
+    t.start()
+    printColored("OK", "green", True)
 
 
-printSeparator()
-printColored("Listening for connections on ports: ", "white", True)
-printSeparator()
-
-
-for k in sockets.keys():
-    printColored(str(k), "dark_grey", False)
+# Create a thread to watch the threads
+print("Thread Watcher", end = " --- ")
+threading.Thread(
+    target = threadWatcher
+).start()
+printColored("OK", "green", True)
+print("")
+print("")
+print("")
 
 
 printSeparator()
 printColored("Press 'ESC' to stop at any time.", "white", True)
 keyboard.hook(exitOnEsc())
 printSeparator()
+
