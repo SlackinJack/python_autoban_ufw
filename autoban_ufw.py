@@ -19,17 +19,21 @@ from termcolor import colored
 # Remember to set your API key
 shouldReport = True
 
+# Set to True if you want UFW rules to be made/removed automatically
+shouldManageUFWRules = False
+
 
 # You must run this script as root if you want to listen on ports < 1024
 # Remember to forward the selected ports in your router
 ports = [
     # basic
+    # removed: 80, 443
     20, 21, 22, 23, 25,
     42, 49,
-    80, 88,
+    88,
     110, 119, 135, 143,
     222,
-    443, 445, 464, 465,
+    445, 464, 465,
     989, 990, 993, 995,
     # extras
     2020, 2121, 2222, 2323, 2525,
@@ -38,9 +42,9 @@ ports = [
     8080, 8081, 8082, 8181, 8282, 8443, 8888,
     20202, 21212, 22222, 23232, 25252,
     # misc
+    # removed: 25565
     1234, 12345, 23456, 34567, 45678, 56789,
     11111, 33333, 44444, 55555,
-    25565,
 ]
 
 
@@ -77,36 +81,44 @@ def clearTerminal():
 
 # Create ufw rule for each listening port
 def createUFWRules(isAllowed):
-    # TODO: differentiate added and removed, skipped
-    if isAllowed:
-        printColored("Creating port rules...", "white", True)
-        printSeparator()
-        for port in ports:
-            print(str(port) + " --- ", end = "")
-            reason = subprocess.run(
-                ["ufw", "allow", str(port)],
-                capture_output = True
-            ).stderr.decode()
-            if len(reason) > 0:
-                printColored("FAIL: " + reason, "red", True)
-                printSeparator()
-                createUFWRules(False)
-                exit()
-            else:
-                printColored("OK", "green", True)
+    # only if 'shouldManageUFWRules' is enabled
+    if shouldManageUFWRules:
+        # TODO: differentiate added and removed, skipped
+        if isAllowed:
+            printColored("Creating port rules...", "white", True)
+            printSeparator()
+            for port in ports:
+                print(str(port) + " --- ", end = "")
+                reason = subprocess.run(
+                    ["ufw", "allow", str(port)],
+                    capture_output = True
+                ).stderr.decode()
+                if len(reason) > 0:
+                    printColored("FAIL: " + reason, "red", True)
+                    printSeparator()
+                    createUFWRules(False)
+                    exit()
+                else:
+                    printColored("OK", "green", True)
+        else:
+            printColored("Removing port rules...", "white", True)
+            printSeparator()
+            for port in ports:
+                print(str(port) + " --- ", end = "")
+                reason = subprocess.run(
+                    ["ufw", "delete", "allow", str(port)],
+                    capture_output = True
+                ).stderr.decode()
+                if len(reason) > 0:
+                    printColored("FAIL: " + reason, "red", True)
+                else:
+                    printColored("OK", "green", True)
     else:
-        printColored("Removing port rules...", "white", True)
-        printSeparator()
-        for port in ports:
-            print(str(port) + " --- ", end = "")
-            reason = subprocess.run(
-                ["ufw", "delete", "allow", str(port)],
-                capture_output = True
-            ).stderr.decode()
-            if len(reason) > 0:
-                printColored("FAIL: " + reason, "red", True)
-            else:
-                printColored("OK", "green", True)
+        printColored("Automatic UFW rule management is disabled.", "grey", True)
+        if isAllowed:
+            printColored("(Assuming the ports are now open!)", "green", True)
+        else:
+            printColored("(Assuming the ports are now closed!)", "red", True)
 
 
 # Exit program on esc key
@@ -118,6 +130,7 @@ def exitOnEsc():
             global shouldReviveThreads
             shouldReviveThreads = False
             createUFWRules(False)
+            printSeparator()
             os._exit(1)
     return callback
 
@@ -189,7 +202,11 @@ def socketAccept(portNumber):
     # bind socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("", portNumber))
+    try:
+        s.bind(("", portNumber))
+    except Exception as e:
+        printColored("Error binding " + str(portNumber) + ".", "red", True)
+        printColored("(" + str(e) + ")", "red", True)
     # listen
     s.listen()
     conn, address = s.accept()
@@ -202,6 +219,7 @@ def socketAccept(portNumber):
     # Print address and the port used
     printResult(address[0], portNumber, "existing" in result)
     # Abort the connection
+    # TODO: refresh ufw rules??
     s.close()
     # Report IP if this is a new address to us
     if not "existing" in result and shouldReport:
@@ -236,9 +254,6 @@ clearTerminal()
 printSeparator()
 printColored("Starting...", "white", True)
 createUFWRules(True)
-print("")
-print("")
-print("")
 
 
 printSeparator()
@@ -264,9 +279,6 @@ threading.Thread(
     target = threadWatcher
 ).start()
 printColored("OK", "green", True)
-print("")
-print("")
-print("")
 
 
 printSeparator()
