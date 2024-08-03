@@ -22,6 +22,9 @@ shouldReport = True
 # Set to True if you want UFW rules to be made/removed automatically
 shouldManageUFWRules = False
 
+# Set to True if you want to use "deny" rather than "reject" for UFW
+shouldUseDeny = False
+
 
 # You must run this script as root if you want to listen on ports < 1024
 # Remember to forward the selected ports in your router
@@ -212,14 +215,14 @@ def socketAccept(portNumber):
     conn, address = s.accept()
     conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
     # Add rule to UFW
+    action = "deny" if shouldUseDeny else "reject"
     result = subprocess.run(
-        ["ufw", "deny", "from", address[0], "to", "any"],
+        ["ufw", action, "from", address[0], "to", "any"],
         capture_output = True
     ).stdout.decode()
     # Print address and the port used
     printResult(address[0], portNumber, "existing" in result)
     # Abort the connection
-    # TODO: refresh ufw rules??
     s.close()
     # Report IP if this is a new address to us
     if not "existing" in result and shouldReport:
